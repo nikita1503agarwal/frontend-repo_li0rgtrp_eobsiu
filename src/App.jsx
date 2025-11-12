@@ -5,7 +5,7 @@ const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 function MenuItemCard({ item, onAdd }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
-      <img src={item.image_url || `https://picsum.photos/seed/${item.name}/400/240`} alt={item.name} className="h-40 w-full object-cover" />
+      <img src={item.image_url || `https://picsum.photos/seed/${encodeURIComponent(item.name)}/400/240`} alt={item.name} className="h-40 w-full object-cover" />
       <div className="p-4 flex-1 flex flex-col">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -65,10 +65,10 @@ export default function App() {
   const [cart, setCart] = useState([])
   const [status, setStatus] = useState('')
 
-  // get table id from URL (?id=5)
+  // get table number from URL (?table=5)
   const tableId = useMemo(() => {
     const u = new URL(window.location.href)
-    return u.searchParams.get('id') || '1'
+    return u.searchParams.get('table') || '1'
   }, [])
 
   useEffect(() => {
@@ -76,7 +76,9 @@ export default function App() {
       try {
         const res = await fetch(`${BACKEND}/api/menu`)
         const data = await res.json()
-        setMenu(data)
+        const items = Array.isArray(data) ? data : (data.items || [])
+        // map _id to id for UI
+        setMenu(items.map((d) => ({ id: d._id || d.id, ...d })))
       } catch (e) {
         console.error(e)
       }
@@ -99,34 +101,35 @@ export default function App() {
     )
   }
 
-  const checkout = async (total) => {
+  const checkout = async () => {
     try {
       setStatus('Creating order...')
       const payload = {
-        table_id: tableId,
+        table_id: String(tableId),
         items: cart.map((c) => ({ item_id: c.id, quantity: c.qty })),
         payment_method: 'online'
       }
-      const res = await fetch(`${BACKEND}/api/orders`, {
+      const res = await fetch(`${BACKEND}/api/order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
       const data = await res.json()
-      if (res.ok) {
-        setStatus(`Order created. Amount ₹${data.amount}. Marking as paid (sandbox)...`)
-        // Simulate payment success in sandbox
-        await fetch(`${BACKEND}/api/payments/webhook`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ order_id: data.id, success: true })
-        })
-        setStatus('Payment successful! Your order is confirmed.')
-        setCart([])
-      } else {
+      if (!res.ok) {
         setStatus(data.detail || 'Failed to create order')
+        return
       }
+      setStatus(`Order created. Amount ₹${data.subtotal}. Processing payment (sandbox)...`)
+      // Simulate payment success in sandbox
+      await fetch(`${BACKEND}/api/payment/mock/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: data.order_id, status: 'succeeded' })
+      })
+      setStatus('Payment successful! Your order is confirmed.')
+      setCart([])
     } catch (e) {
+      console.error(e)
       setStatus('Error during checkout')
     }
   }
@@ -152,13 +155,16 @@ export default function App() {
 
       <main className="max-w-6xl mx-auto px-4 py-6 grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="md:col-span-2 space-y-8">
+          {Object.keys(categories).length === 0 && (
+            <div className="text-gray-600">No menu items yet. Add items from the admin panel.</div>
+          )}
           {Object.keys(categories).map((cat) => (
             <div key={cat}>
               <h2 className="text-lg font-semibold text-gray-800 mb-3">{cat}</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {categories[cat].map((item) => (
-                  <MenuItemCard key={item.id} item={item} onAdd={addToCart} />
-                ))}
+                  <MenuItemCard key={item.id} item={item} onAdd={addToCart} />)
+                )}
               </div>
             </div>
           ))}
@@ -168,11 +174,14 @@ export default function App() {
           {status && (
             <p className="mt-3 text-sm text-gray-700">{status}</p>
           )}
+          <div className="mt-6 p-3 text-xs text-gray-500 bg-white border rounded-lg">
+            Tip: Generate a QR for this table from the backend: /api/qr/{tableId}
+          </div>
         </div>
       </main>
 
       <footer className="py-6 text-center text-xs text-gray-500">
-        Scan the QR code to open this page with your table id, e.g. /?id=5
+        Scan the QR code to open this page with your table id, e.g. /?table=5
       </footer>
     </div>
   )
